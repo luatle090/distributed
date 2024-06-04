@@ -71,6 +71,7 @@ type Raft struct {
 	votedFor     int            // vote for candidate in current term
 	logOperation []LogOperation // command operation
 	currentRole  int            // state leader, follower, candidate
+	splitVote    int8
 
 	lastApplied int
 	leaderId    int
@@ -268,16 +269,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 // leader send periodic heartbeats with AppendEntriArgs no carry log entries
 func (rf *Raft) sendHeartbeat() bool {
-	type Result struct {
-		serverId  int
-		okNetwork bool
-		reply     AppendEntriesReply
-	}
+	// type Result struct {
+	// 	serverId  int
+	// 	okNetwork bool
+	// 	reply     AppendEntriesReply
+	// }
 	isLeader := true
-	// before send a heart beat should check this peer still be a leader
-	// DPrintf("[%d] prepare sending heart beat", rf.me)
+	// before send a heart beat should check this peer is still be a leader
+	DPrintf("[%d] prepare sending heart beat", rf.me)
 	rf.mu.Lock()
-	if rf.currentRole == Follower || rf.currentRole == Candidate {
+	if rf.currentRole != Leader {
 		rf.mu.Unlock()
 		isLeader = false
 		return isLeader
@@ -311,8 +312,7 @@ func (rf *Raft) sendHeartbeat() bool {
 				if !reply.Success && reply.Term > currentTerm {
 					rf.currentTerm = reply.Term
 					rf.currentRole = Follower
-					isLeader = false
-					// DPrintf("[%d] send heartbeat but got new term %d [currentRole=%v]", rf.me, rf.currentTerm, rf.currentRole)
+					DPrintf("[%d] send heartbeat but got new term %d [currentRole=%v]", rf.me, rf.currentTerm, rf.currentRole)
 				}
 			}(i)
 		}
@@ -382,11 +382,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 // prepare and sending out requestvote
 func (rf *Raft) startElection() {
-	type Result struct {
-		serverId int
-		ok       bool
-		reply    RequestVoteReply
-	}
+	// type Result struct {
+	// 	serverId int
+	// 	ok       bool
+	// 	reply    RequestVoteReply
+	// }
 	rf.mu.Lock()
 	rf.votedFor = rf.me
 	rf.currentRole = Candidate
@@ -424,6 +424,7 @@ func (rf *Raft) startElection() {
 
 				// }
 				// resultChannel <- Result{i, ok, reply}
+				// handle vote
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				if rf.currentTerm < reply.CurrentTerm {
@@ -480,7 +481,6 @@ func (rf *Raft) startElection() {
 	// 		}
 	// 		// Final:
 	// 		rf.mu.Unlock()
-	// 	}
 
 	// if reply.VoteGranted {
 	// 	// count majority of the servers in cluster
@@ -502,18 +502,7 @@ func (rf *Raft) startElection() {
 	// }
 	// }
 
-	// reply := new(RequestVoteReply)
-	// for reply != nil || reply.VoteGranted {
-	// 	r := <-replyChannel
-	// 	reply = &r
-	// 	rf.mu.Lock()
-	// 	if rf.currentTerm < r.CurrentTerm {
-	// 		rf.currentTerm = r.CurrentTerm
-	// 		rf.currentRole = Follower
 	// 	}
-	// 	rf.mu.Unlock()
-	// }
-
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -560,15 +549,26 @@ func (rf *Raft) killed() bool {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
-	shiftMin := (rf.me + 2) * 3
+	shiftMin := rand.Intn((rf.me + 2) * 3)
 	// shiftMin := 0
-	timeInterval := time.Duration(rand.Intn(300)+300+shiftMin) * time.Millisecond
+	timeInterval := time.Duration(rand.Intn(200)+400+shiftMin) * time.Millisecond
 	for rf.killed() == false {
 
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 		time.Sleep(timeInterval)
+		// (consider) check split vote, if split vote greater number of slipt vote and current role is candidate, so random a new number to sleep a while. (count number of slipt vote)
+		rf.mu.Lock()
+		if rf.currentRole == Candidate {
+			rf.splitVote++
+			if rf.splitVote > 2 {
+				rf.splitVote = 0
+				timeInterval += time.Duration(rand.Intn(40)) * time.Millisecond
+			}
+		}
+		rf.mu.Unlock()
+
 		// check election timeout if zero
 		if !rf.killed() {
 			rf.mu.Lock()
@@ -585,7 +585,7 @@ func (rf *Raft) ticker() {
 }
 
 func (rf *Raft) heartbeat(term int) {
-	timeInterval := time.Duration(115 * time.Millisecond)
+	timeInterval := time.Duration(120 * time.Millisecond)
 	isLeader := true
 	DPrintf("[%d] is leader within term %d", rf.me, term)
 	for !rf.killed() && isLeader {
@@ -608,6 +608,7 @@ func (rf *Raft) heartbeat(term int) {
 // for any long-running work.
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	DPrintf("testing")
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
