@@ -198,6 +198,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		lastTerm = rf.logOperation[rf.lastApplied].Term
 	}
 
+	// 5.4.1 election restriction
 	log := (lastTerm > 0 && args.LastLogTerm >= lastTerm && args.LastLogIndex >= rf.lastApplied) ||
 		(lastTerm == 0 && args.LastLogIndex == rf.lastApplied)
 
@@ -217,6 +218,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		reply.CurrentTerm = args.Term
 		rf.currentTerm = args.Term
+		rf.electionTimeout = time.Now()
 		DPrintf("[%d] vote for [%d] within term %d", rf.me, rf.votedFor, args.Term)
 	} else {
 		DPrintf("current term %d - [%d] reject vote for [%d] within term %d", rf.currentTerm, rf.me, args.CandidateId, args.Term)
@@ -239,6 +241,7 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
+// AppendEntries RPC handler
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -294,12 +297,7 @@ func (rf *Raft) sendHeartbeat() bool {
 			go func(i int) {
 				// defer wg.Done()
 				reply := AppendEntriesReply{}
-				ok := false
-				// for !notOk {
-				// DPrintf("[%d] before serverid=%d", rf.me, i)
-				ok = rf.sendAppendEntries(i, &args, &reply)
-				// DPrintf("[%d] after serverid=%d ok=%v", rf.me, i, ok)
-				// }
+				ok := rf.sendAppendEntries(i, &args, &reply)
 				// replyChan <- Result{i, ok, reply}
 				if !ok {
 					// DPrintf("[%d] send heartbeat to [%d] but network failed", rf.me, i)
@@ -415,14 +413,11 @@ func (rf *Raft) startElection() {
 				// defer wg.Done()
 				DPrintf("[%d] sending request vote to [%d] at term %d", args.CandidateId, i, args.Term)
 				reply := RequestVoteReply{}
-				ok := false
-				// for !ok {
-				ok = rf.sendRequestVote(i, &args, &reply)
+				ok := rf.sendRequestVote(i, &args, &reply)
 				if !ok {
 					return
 				}
 
-				// }
 				// resultChannel <- Result{i, ok, reply}
 				// handle vote
 				rf.mu.Lock()
